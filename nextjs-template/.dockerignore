@@ -1,0 +1,19 @@
+.git
+.gitignore
+node_modules
+.next
+out
+build
+coverage
+.DS_Store
+*.pem
+npm-debug.log*
+yarn-error.log*
+.vscode
+.idea
+README.md
+
+# NOTE: .env is deliberately NOT ignored. Next inlines NEXT_PUBLIC_* into the
+# client bundle during the build, so the file must be in the build context.
+# Those values are public by definition. If a server-only secret is ever added,
+# switch to a multi-stage build so .env cannot reach the final image.

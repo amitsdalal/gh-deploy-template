@@ -1,0 +1,201 @@
+---
+# Build -> GHCR -> deploy via self-hosted runner.
+#
+# TEMPLATE. Copy to .github/workflows/ in the target repository.
+#
+# Requires, per GitHub Environment (Settings -> Environments):
+#   secret    DOTENV         the whole .env for that environment
+#   variable  PORT           host port to publish on (must differ per env
+#                            when environments share a machine)
+#   variable  REPLICAS       app container count
+#   variable  APP_NAME       optional; defaults to the repository name
+#   variable  API_HOST       optional, with API_ORIGIN_IP -- see deployment.md
+#   variable  API_ORIGIN_IP  optional
+#
+# And a self-hosted runner per environment, labelled with the environment name
+# (see shared/scripts/setup-runner.sh).
+#
+# Mapping from a GitLab pipeline, if you are porting one:
+#   CI_REGISTRY_IMAGE  -> ghcr.io/<owner>/<repo>   (lowercased)
+#   CI_PIPELINE_IID    -> github.run_number
+#   $DOTENV file var   -> a GitHub Secret per environment, written to .env
+#   `when: manual`     -> a GitHub Environment with a required reviewer
+#
+# Auth uses the ephemeral GITHUB_TOKEN (permissions.packages: write) -- no PAT.
+# The production server is never SSH'd into; the self-hosted runner lives on it
+# and pulls the image itself.
+#
+# WHY .env is written BEFORE docker build: Next inlines NEXT_PUBLIC_* into the
+# client bundle at build time. The image is therefore environment-specific --
+# dev/uat/prod are separate builds of the same commit, not one image promoted.
+
+name: build-deploy
+
+on:
+  push:
+    branches: [uat, main]
+  workflow_dispatch:
+
+env:
+  REGISTRY: ghcr.io
+  APP_VERSION: ${{ github.run_number }}
+
+jobs:
+  # ---------------------------------------------------------------- resolve
+  # One place to map branch -> environment, so build and deploy cannot drift.
+  setup:
+    runs-on: ubuntu-latest
+    outputs:
+      environment: ${{ steps.map.outputs.environment }}
+      image: ${{ steps.map.outputs.image }}
+    steps:
+      - id: map
+        run: |
+          # Only these two branches deploy. Anything else is a hard error
+          # rather than a silent no-op, so a mistyped branch is obvious.
+          case "${GITHUB_REF_NAME}" in
+            main) echo "environment=prod" >> "$GITHUB_OUTPUT" ;;
+            uat)  echo "environment=uat"  >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::branch ${GITHUB_REF_NAME} is not wired to an environment"; exit 1 ;;
+          esac
+          # GHCR rejects uppercase in image paths
+          echo "image=${REGISTRY}/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+  # ------------------------------------------------------------------ build
+  build:
+    needs: setup
+    # Built ON the target server, not on a GitHub-hosted runner.
+    #
+    # Why: `npm run build` ends with scripts/generate-sitemap.js, which pulls
+    # six large sitemap endpoints plus the header menu from the live API. From
+    # GitHub's runners that request path consistently exceeded Cloudflare's
+    # ~100s limit and returned 524, failing every production build (UAT's
+    # smaller dataset squeaked through). The self-hosted runner shares the
+    # region and network path with the API origin, so the same calls complete.
+    #
+    # Side benefit: the host's Docker layer cache persists between runs, which
+    # is faster than shipping a cache to and from GitHub.
+    runs-on: [self-hosted, "${{ needs.setup.outputs.environment }}"]
+    environment: ${{ needs.setup.outputs.environment }}
+    permissions:
+      contents: read
+      packages: write          # scope for GITHUB_TOKEN to push to GHCR
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write .env from the environment secret
+        # Must exist before `npm run build` -- see note at the top of this file.
+        run: |
+          printf '%s' "${{ secrets.DOTENV }}" > .env
+          echo "wrote .env ($(grep -c '=' .env) keys)"   # names/values never echoed
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          # A container does NOT inherit the host's /etc/hosts, so the build
+          # cannot see the server's api -> origin mapping. Without this the
+          # sitemap step goes through Cloudflare, which cuts the request at
+          # ~100s; the query legitimately needs ~250s. Empty when the vars are
+          # unset, in which case the build resolves normally.
+          add-hosts: ${{ (vars.API_HOST != '' && vars.API_ORIGIN_IP != '') && format('{0}={1}', vars.API_HOST, vars.API_ORIGIN_IP) || '' }}
+          tags: |
+            ${{ needs.setup.outputs.image }}:${{ needs.setup.outputs.environment }}-${{ env.APP_VERSION }}
+            ${{ needs.setup.outputs.image }}:${{ needs.setup.outputs.environment }}-latest
+
+  # ----------------------------------------------------------------- deploy
+  # Runs ON the target server. Add a required reviewer to the `prod`
+  # Environment in repo settings to reproduce GitLab's `when: manual`.
+  deploy:
+    needs: [setup, build]
+    runs-on: [self-hosted, "${{ needs.setup.outputs.environment }}"]
+    environment: ${{ needs.setup.outputs.environment }}
+    permissions:
+      contents: read
+      packages: read
+    env:
+      CI_REGISTRY_IMAGE: ${{ needs.setup.outputs.image }}
+      CI_ENVIRONMENT_NAME: ${{ needs.setup.outputs.environment }}
+      COMPOSE_PROJECT_NAME: ${{ needs.setup.outputs.environment }}_${{ vars.APP_NAME || github.event.repository.name }}
+      REPLICAS: ${{ vars.REPLICAS || 1 }}
+      PORT: ${{ vars.PORT }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Write .env for runtime (server-side vars)
+        run: printf '%s' "${{ secrets.DOTENV }}" > .env
+
+      - name: Compose file list (+ optional host overrides)
+        # getServerSideProps and the API routes call the same API on every
+        # request, so the running container needs the mapping too -- not just
+        # the build. Written as an override so the base compose file stays
+        # environment-agnostic.
+        run: |
+          FILES="-f docker-compose-prod.yaml"
+          if [ -n "${{ vars.API_HOST }}" ] && [ -n "${{ vars.API_ORIGIN_IP }}" ]; then
+            cat > docker-compose.hosts.yaml <<YAML
+          services:
+            web:
+              extra_hosts:
+                - "${{ vars.API_HOST }}:${{ vars.API_ORIGIN_IP }}"
+          YAML
+            FILES="$FILES -f docker-compose.hosts.yaml"
+            echo "host override: ${{ vars.API_HOST }} -> ${{ vars.API_ORIGIN_IP }}"
+          else
+            echo "no host override configured"
+          fi
+          echo "COMPOSE_FILES=$FILES" >> "$GITHUB_ENV"
+
+      - name: Log in to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" \
+            | docker login ${{ env.REGISTRY }} -u ${{ github.actor }} --password-stdin
+
+      - name: Pull image
+        run: docker pull "${CI_REGISTRY_IMAGE}:${CI_ENVIRONMENT_NAME}-${APP_VERSION}"
+
+      - name: Deploy
+        # No `down -v` -- that would delete the nginx config volume and take the
+        # site down during the pull. `up -d` recreates only what changed.
+        run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" \
+            $COMPOSE_FILES up -d --remove-orphans
+
+      - name: Health check
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${PORT}/" -o /dev/null; then
+              echo "healthy after ${i} attempt(s)"; exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::health check failed"
+          docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILES logs --tail=100
+          exit 1
+
+      - name: Roll back on failure
+        if: failure()
+        run: |
+          PREV=$((APP_VERSION - 1))
+          echo "::warning::rolling back to ${CI_ENVIRONMENT_NAME}-${PREV}"
+          APP_VERSION="$PREV" docker compose -p "$COMPOSE_PROJECT_NAME" \
+            $COMPOSE_FILES up -d
+
+      - name: Prune old images
+        if: always()
+        run: docker image prune -f --filter "until=168h"
+
+      - name: Logout
+        if: always()
+        run: docker logout ${{ env.REGISTRY }}

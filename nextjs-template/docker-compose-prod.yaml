@@ -1,0 +1,41 @@
+# DEPLOY stack: pulls a pre-built image from the registry, never builds.
+#
+# Environment supplied by the workflow:
+#   CI_REGISTRY_IMAGE     ghcr.io/<owner>/<repo>
+#   CI_ENVIRONMENT_NAME   uat | prod | ...
+#   APP_VERSION           the run number that produced the image
+#   COMPOSE_PROJECT_NAME  <env>_<app>  -- isolates containers/networks/volumes
+#   REPLICAS              app container count
+#   PORT                  host port; MUST differ per environment on a shared host
+#
+# Host overrides (extra_hosts) are added by the workflow as a separate override
+# file when API_HOST and API_ORIGIN_IP are set, so this file stays generic.
+
+networks:
+  frontend:
+    name: "${COMPOSE_PROJECT_NAME}_network"
+
+services:
+  web:
+    image: "${CI_REGISTRY_IMAGE}:${CI_ENVIRONMENT_NAME}-${APP_VERSION}"
+    restart: unless-stopped
+    env_file:
+      - .env
+    networks:
+      - frontend
+    deploy:
+      mode: replicated
+      replicas: ${REPLICAS:-1}
+
+  proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    container_name: "${COMPOSE_PROJECT_NAME}_proxy"
+    ports:
+      - "127.0.0.1:${PORT}:80"
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - frontend
+    depends_on:
+      - web

@@ -1,0 +1,46 @@
+# LOCAL stack: builds from source, mirrors the production layering so local
+# behaviour matches the server.
+#
+# Compose reads ./.env for ${VAR} interpolation. Copy .env.example to .env.
+
+networks:
+  frontend:
+    name: "${COMPOSE_PROJECT_NAME:-app}_network"
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      # Only needed when an API must be reached directly rather than through a
+      # CDN -- see "Reaching the API directly" in deployment.md. A container
+      # does NOT inherit the host's /etc/hosts, so it has to be stated here.
+      # No default: a missing value should fail loudly, not silently build
+      # against the CDN and time out.
+      extra_hosts:
+        - "${API_HOST}:${API_ORIGIN_IP}"
+    image: "${APP_NAME:-app}:local"
+    restart: unless-stopped
+    # server-rendered pages call the API on every request, so runtime needs the
+    # same mapping as the build
+    extra_hosts:
+      - "${API_HOST}:${API_ORIGIN_IP}"
+    env_file:
+      - .env
+    networks:
+      - frontend
+
+  proxy:
+    image: nginx:stable-alpine
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${PORT:-8080}:80"
+    # bind-mounted, NOT shared via a named volume: Docker only seeds a named
+    # volume while it is empty, so a later image's nginx.conf would silently
+    # never take effect
+    volumes:
+      - ./nginx.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - frontend
+    depends_on:
+      - web

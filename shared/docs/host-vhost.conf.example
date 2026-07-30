@@ -1,0 +1,103 @@
+# Host web-server vhost -- terminates TLS and forwards to the container stack.
+#
+# Place in the host's sites-enabled/ (a real file, not a symlink) and make sure
+# nginx.conf includes that directory. The container stack publishes on
+# 127.0.0.1:<PORT>; this is what makes it reachable by domain.
+#
+# Replace: EXAMPLE.COM, HOST_IP, APP_PORT.
+#
+# ---------------------------------------------------------------------------
+# TWO TRAPS THAT COST REAL TIME
+#
+# 1. `nginx -t` passes even when the config CANNOT bind.
+#    It never attempts to bind a socket. If another vhost already holds
+#    <HOST_IP>:443, a wildcard `listen 443 ssl;` here fails at reload with
+#    "bind() to 0.0.0.0:443 failed (98: Address already in use)" -- and nginx
+#    silently keeps running the OLD config. Always check the reload:
+#        systemctl reload nginx && journalctl -u nginx --since '30 sec ago' | grep -i emerg
+#
+# 2. A more specific listener wins.
+#    If a control panel writes `listen HOST_IP;` blocks, connections to that
+#    address never reach a plain `listen 80;` block, whatever server_name says
+#    -- requests land on the panel's default vhost instead. Bind the host IP
+#    explicitly here, as below.
+#
+# If a control panel manages this domain's web feature, DISABLE that feature
+# for the domain first, or it will overwrite this file.
+# ---------------------------------------------------------------------------
+
+upstream app_upstream {
+    server 127.0.0.1:APP_PORT;
+    keepalive 64;
+}
+
+server {
+    listen HOST_IP:80;
+    server_name EXAMPLE.COM www.EXAMPLE.COM;
+
+    location ^~ /.well-known/acme-challenge/ {
+        root /var/www/html;
+        try_files $uri =404;
+    }
+    location / {
+        return 301 https://EXAMPLE.COM$request_uri;   # or https://www.EXAMPLE.COM
+    }
+}
+
+server {
+    listen HOST_IP:443 ssl;
+    http2 on;                       # needs nginx >= 1.25.1
+    server_name EXAMPLE.COM;
+
+    ssl_certificate     /path/to/fullchain.cert;   # chmod 644
+    ssl_certificate_key /path/to/privkey.key;      # chmod 600 -- check this
+    ssl_protocols       TLSv1.2 TLSv1.3;
+    ssl_session_cache   shared:SSL_EXAMPLE:10m;
+    ssl_session_timeout 1d;
+
+    access_log /var/log/nginx/EXAMPLE.COM_access.log;
+    error_log  /var/log/nginx/EXAMPLE.COM_error.log;
+
+    # NON-PRODUCTION ONLY -- delete for the live site or it will be deindexed.
+    # proxy_hide_header X-Robots-Tag;
+    # add_header X-Robots-Tag "noindex, nofollow" always;
+
+    client_max_body_size        128m;
+    client_body_buffer_size     64m;
+    client_header_buffer_size   64k;
+    large_client_header_buffers 64 64k;
+
+    location /_next/static/ {
+        proxy_pass http://app_upstream;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header Connection "";
+        proxy_hide_header Cache-Control;
+        add_header Cache-Control "public, max-age=31536000, immutable";
+    }
+
+    location / {
+        proxy_pass http://app_upstream;
+        proxy_http_version 1.1;
+        proxy_redirect off;
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        proxy_set_header Upgrade    $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;   # needs the map below
+
+        proxy_buffering         off;
+        proxy_request_buffering off;
+        proxy_read_timeout      600s;
+    }
+}
+
+# Put once at http level, e.g. conf.d/00-websocket-map.conf:
+#
+# map $http_upgrade $connection_upgrade {
+#     default upgrade;
+#     ''      close;
+# }
