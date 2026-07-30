@@ -78,9 +78,14 @@ then applies the mapping to the build *and* to the running container, since
 server-rendered pages call the API on every request. Fixing only the build is a
 common half-measure.
 
-**Validate the env file before pasting it into a secret.** A malformed value
-can build fine and fail at deploy, because the app's own loader is forgiving
-while Docker is strict:
+**Env files are validated automatically.** The workflow checks the file the
+moment it is written, in both the build and deploy jobs, and fails in about a
+second with the line number and key name if anything is malformed. This exists
+because a malformed value can build fine and only fail at deploy -- the app's
+own loader is forgiving, Docker is strict. Values are never printed, so it is
+safe in CI logs.
+
+Check a file yourself before pasting it into a secret:
 
 ```bash
 ../shared/scripts/validate-env.sh .env

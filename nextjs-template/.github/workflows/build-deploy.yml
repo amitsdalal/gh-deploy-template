@@ -89,6 +89,35 @@ jobs:
           printf '%s' "${{ secrets.DOTENV }}" > .env
           echo "wrote .env ($(grep -c '=' .env) keys)"   # names/values never echoed
 
+      - name: Validate .env formatting
+        # One second here beats discovering a malformed secret after an
+        # eight-minute build. The app's own dotenv loader is forgiving; Docker
+        # and the shell are not, so a file can build fine and then fail at
+        # deploy. Prints line numbers and key names only -- never values.
+        run: |
+          fail=0; n=0
+          while IFS= read -r l || [ -n "$l" ]; do
+            n=$((n+1))
+            case "$l" in *$'\r'*) echo "::error::.env line $n: CRLF line ending"; fail=1 ;; esac
+            l="${l%$'\r'}"
+            [ -z "${l// }" ] && continue
+            case "$l" in \#*) continue ;; esac
+            case "$l" in *=*) : ;; *) echo "::error::.env line $n: no '=' on a non-comment line"; fail=1; continue ;; esac
+            k="${l%%=*}"; v="${l#*=}"; kt="${k// }"
+            [ "$k" != "$kt" ] && { echo "::error::.env line $n ($kt): space around '=' -- write KEY=value"; fail=1; }
+            t="$(printf '%s' "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [ "$v" != "$t" ] && { echo "::error::.env line $n ($kt): leading/trailing space in value"; fail=1; }
+            sq="$(printf '%s' "$t" | tr -cd "'" | wc -c | tr -d ' ')"
+            dq="$(printf '%s' "$t" | tr -cd '"'  | wc -c | tr -d ' ')"
+            [ $((sq % 2)) -ne 0 ] && { echo "::error::.env line $n ($kt): unbalanced single quote -- Docker rejects the whole file"; fail=1; }
+            [ $((dq % 2)) -ne 0 ] && { echo "::error::.env line $n ($kt): unbalanced double quote -- Docker rejects the whole file"; fail=1; }
+          done < .env
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::.env is malformed -- fix the DOTENV secret for this environment"
+            exit 1
+          fi
+          echo "OK: $(grep -cE '^[[:space:]]*[A-Za-z_]' .env) keys, no formatting problems"
+
       - uses: docker/setup-buildx-action@v4
 
       - name: Log in to GHCR
@@ -135,6 +164,35 @@ jobs:
 
       - name: Write .env for runtime (server-side vars)
         run: printf '%s' "${{ secrets.DOTENV }}" > .env
+
+      - name: Validate .env formatting
+        # One second here beats discovering a malformed secret after an
+        # eight-minute build. The app's own dotenv loader is forgiving; Docker
+        # and the shell are not, so a file can build fine and then fail at
+        # deploy. Prints line numbers and key names only -- never values.
+        run: |
+          fail=0; n=0
+          while IFS= read -r l || [ -n "$l" ]; do
+            n=$((n+1))
+            case "$l" in *$'\r'*) echo "::error::.env line $n: CRLF line ending"; fail=1 ;; esac
+            l="${l%$'\r'}"
+            [ -z "${l// }" ] && continue
+            case "$l" in \#*) continue ;; esac
+            case "$l" in *=*) : ;; *) echo "::error::.env line $n: no '=' on a non-comment line"; fail=1; continue ;; esac
+            k="${l%%=*}"; v="${l#*=}"; kt="${k// }"
+            [ "$k" != "$kt" ] && { echo "::error::.env line $n ($kt): space around '=' -- write KEY=value"; fail=1; }
+            t="$(printf '%s' "$v" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')"
+            [ "$v" != "$t" ] && { echo "::error::.env line $n ($kt): leading/trailing space in value"; fail=1; }
+            sq="$(printf '%s' "$t" | tr -cd "'" | wc -c | tr -d ' ')"
+            dq="$(printf '%s' "$t" | tr -cd '"'  | wc -c | tr -d ' ')"
+            [ $((sq % 2)) -ne 0 ] && { echo "::error::.env line $n ($kt): unbalanced single quote -- Docker rejects the whole file"; fail=1; }
+            [ $((dq % 2)) -ne 0 ] && { echo "::error::.env line $n ($kt): unbalanced double quote -- Docker rejects the whole file"; fail=1; }
+          done < .env
+          if [ "$fail" -ne 0 ]; then
+            echo "::error::.env is malformed -- fix the DOTENV secret for this environment"
+            exit 1
+          fi
+          echo "OK: $(grep -cE '^[[:space:]]*[A-Za-z_]' .env) keys, no formatting problems"
 
       - name: Compose file list (+ optional host overrides)
         # getServerSideProps and the API routes call the same API on every

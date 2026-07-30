@@ -138,9 +138,15 @@ These are not style preferences. Each one below has broken a real deployment:
   error; it quietly becomes `undefined` and breaks a feature at runtime.
 - Never commit a `.env` file. It is git-ignored and must stay that way.
 
-A quick way to check a file before pasting it in: every line should look like
-`NAME=value`, with no spaces on either side of the `=` and no lone quote
-characters.
+These are **checked automatically**. Every deployment validates the file as
+soon as it is written and stops within a second if anything is wrong, telling
+you the line number and the name of the offending setting. Values are never
+printed. Before that check existed, a malformed entry would build successfully
+and only fail at the release step, after eight minutes.
+
+A quick way to check a file yourself before pasting it in: every line should
+look like `NAME=value`, with no spaces on either side of the `=` and no lone
+quote characters.
 
 ---
 
@@ -208,6 +214,7 @@ that actually loads the site; if the site does not respond, the job fails.
 | `deploy` waits forever, never starts | The server's agent is offline, or its label does not match the environment |
 | `deploy` fails pulling the image | The registry package is not linked to this repository |
 | Health check fails | The app crashed on boot, or the environment's `PORT` clashes with something else |
+| A deployment stops immediately saying `.env` is malformed | The environment's `DOTENV` secret has a bad line; the message names it |
 | Build fails at the sitemap step with a 524 | The API took longer than Cloudflare allows -- set `API_HOST` and `API_ORIGIN_IP` (see 5a) |
 | Site loads but a feature is broken | A variable is missing from `DOTENV` — remember it needs a rebuild |
 

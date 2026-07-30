@@ -37,7 +37,7 @@ Stack-agnostic pieces used by every template:
 | Path | What it does |
 | ---- | ------------ |
 | [`shared/scripts/setup-runner.sh`](shared/scripts/setup-runner.sh) | Installs and registers a self-hosted runner on a RHEL-family server. Idempotent, one runner per environment, with an uninstall mode |
-| [`shared/scripts/validate-env.sh`](shared/scripts/validate-env.sh) | Checks an env file for the defects that break deployments. Prints line numbers and key names only, never values |
+| [`shared/scripts/validate-env.sh`](shared/scripts/validate-env.sh) | Checks an env file for the defects that break deployments. Prints line numbers and key names only, never values. The same check is inlined in the workflow, so CI catches a bad secret before the build runs |
 | [`shared/docs/host-vhost.conf.example`](shared/docs/host-vhost.conf.example) | Host web-server vhost that terminates TLS and forwards to the container stack |
 
 ## How it is meant to be used
