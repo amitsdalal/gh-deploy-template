@@ -228,7 +228,7 @@ jobs:
         # site down during the pull. `up -d` recreates only what changed.
         run: |
           docker compose -p "$COMPOSE_PROJECT_NAME" \
-            $COMPOSE_FILES up -d --remove-orphans
+            $COMPOSE_FILES up -d --remove-orphans --force-recreate
 
       - name: Health check
         run: |

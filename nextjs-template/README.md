@@ -94,6 +94,14 @@ Check a file yourself before pasting it into a secret:
 **Compose `deploy.replicas` only scales the app service.** The proxy has a
 fixed container name and stays single.
 
+**The proxy resolves the app at request time, via a variable and Docker's
+embedded DNS.** Do not "simplify" it back to `proxy_pass http://web:3000;` --
+nginx then resolves that name while parsing the config and exits if the app is
+not up yet, crash-looping forever afterwards. The deploy also runs
+`--force-recreate`, because the proxy's image never changes and `up -d` would
+otherwise never recreate it, letting it keep a stale network reference it can
+never recover from.
+
 ## Local development
 
 ```bash
