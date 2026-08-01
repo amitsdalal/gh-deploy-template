@@ -18,6 +18,7 @@ Next.js (pages router) in a container, run by **PM2** in cluster mode, behind an
 | `.env.example` | Template for the real `.env` | yes |
 | `.github/workflows/build-deploy.yml` | The pipeline | branch names |
 | `deployment.md` | Guide for the app developers | project wording |
+| `redeploy.md` | How to redeploy or roll back without a rebuild | project wording |
 
 ## Setting up a new project
 

@@ -39,6 +39,7 @@ Stack-agnostic pieces used by every template:
 | [`shared/scripts/setup-runner.sh`](shared/scripts/setup-runner.sh) | Installs and registers a self-hosted runner on a RHEL-family server. Idempotent, one runner per environment, with an uninstall mode |
 | [`shared/scripts/validate-env.sh`](shared/scripts/validate-env.sh) | Checks an env file for the defects that break deployments. Prints line numbers and key names only, never values. The same check is inlined in the workflow, so CI catches a bad secret before the build runs |
 | [`shared/docs/host-vhost.conf.example`](shared/docs/host-vhost.conf.example) | Host web-server vhost that terminates TLS and forwards to the container stack |
+| [`shared/docs/csf-docker.md`](shared/docs/csf-docker.md) | Required host configuration when CSF and Docker share a server. Without it containers resolve DNS but cannot reach anything, which looks like the app hanging |
 
 ## How it is meant to be used
 
