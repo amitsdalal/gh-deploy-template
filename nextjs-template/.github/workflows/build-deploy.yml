@@ -133,6 +133,10 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
+          # GHCR layer cache (:buildcache): reuse unchanged layers (esp. npm install)
+          # across runs; survives host image pruning. ~6x on a no-change rebuild.
+          cache-from: type=registry,ref=${{ needs.setup.outputs.image }}:buildcache
+          cache-to: type=registry,ref=${{ needs.setup.outputs.image }}:buildcache,mode=max
           # A container does NOT inherit the host's /etc/hosts, so the build
           # cannot see the server's api -> origin mapping. Without this the
           # sitemap step goes through Cloudflare, which cuts the request at
@@ -252,7 +256,13 @@ jobs:
 
       - name: Prune old images
         if: always()
-        run: docker image prune -f --filter "until=168h"
+        run: |
+          docker image prune -f --filter "until=168h"
+          # also keep only the last 5 tagged versions of this env image (image prune never
+          # drops old tags -> they pile up and fill the disk). rmi skips in-use; GHCR keeps all.
+          docker images "${CI_REGISTRY_IMAGE}" --format '{{.Repository}}:{{.Tag}}' \
+            | grep -E ":${CI_ENVIRONMENT_NAME}-[0-9]+$" | sort -V -r | tail -n +6 \
+            | xargs -r docker rmi 2>/dev/null || true
 
       - name: Logout
         if: always()
