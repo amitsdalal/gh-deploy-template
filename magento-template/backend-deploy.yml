@@ -1,0 +1,69 @@
+# Magento (in-place) deploy — GitHub Actions self-hosted runner
+#
+# UNLIKE the image-based templates in this repo, a Magento 2 monolith is deployed
+# IN PLACE on the server: the runner (running as the app's unix user) pulls the
+# branch into the app dir and runs the Magento build. No Docker image, no GHCR.
+#
+# Fill in the <PLACEHOLDERS>, then commit as .github/workflows/backend-deploy.yml on
+# your deploy branch AND the default branch (so the manual "Run workflow" button shows).
+# See README.md for the server prereqs.
+name: Backend deploy
+
+on:
+  push:
+    branches: [<DEPLOY_BRANCH>]          # e.g. uat / new_uat
+  workflow_dispatch:                      # manual re-run from the Actions tab
+    inputs:
+      force_composer:
+        description: Run composer install even if composer.json/lock are unchanged
+        type: boolean
+        default: false
+
+concurrency:
+  group: backend-deploy-${{ github.ref_name }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, <REPO_SLUG>, <ENV>]     # runner labels (env e.g. uat/prod)
+    steps:
+      - name: Pull + conditional composer + Magento build
+        env:
+          BRANCH: ${{ github.ref_name }}
+          GH_TOKEN: ${{ github.token }}
+          FORCE_COMPOSER: ${{ github.event.inputs.force_composer || 'false' }}
+        run: |
+          set -euo pipefail
+          APP="$HOME/public_html"          # <-- app root on the server
+          cd "$APP"
+          # never leave the store stuck in maintenance if a step fails
+          trap 'php bin/magento maintenance:disable || true' EXIT
+
+          # the box has no unattended git credential -> authenticate the pull with the
+          # ephemeral Actions token (Basic header; git-over-HTTPS rejects bearer)
+          B64=$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)
+
+          before=$(git rev-parse HEAD)
+          git -c http.extraheader="AUTHORIZATION: basic $B64" pull --ff-only origin "$BRANCH"
+          after=$(git rev-parse HEAD)
+
+          # conditional composer install — skip on pure code/config pushes
+          if [ "$FORCE_COMPOSER" = "true" ] || [ ! -d vendor ] \
+             || ! git diff --quiet "$before" "$after" -- composer.json composer.lock; then
+            echo ">> composer install (deps changed / vendor missing / forced)"
+            composer install --no-dev --optimize-autoloader --no-interaction --prefer-dist
+          else
+            echo ">> skipping composer install (no dependency change)"
+          fi
+
+          php bin/magento maintenance:enable
+          php bin/magento setup:upgrade
+          php bin/magento setup:di:compile
+          php bin/magento setup:static-content:deploy -f
+          php bin/magento cache:flush
+          php bin/magento indexer:reindex
+          php bin/magento maintenance:disable
+          sudo /bin/systemctl restart <PHP_FPM_UNIT>     # e.g. php81-php-fpm.service

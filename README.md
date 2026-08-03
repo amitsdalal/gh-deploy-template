@@ -27,6 +27,7 @@ locally and on the server.
 | Template | For |
 | -------- | --- |
 | [`nextjs-template/`](nextjs-template/) | Next.js (pages router) served by PM2 behind an nginx sidecar |
+| [`magento-template/`](magento-template/) | Magento 2 monolith, deployed **in place** (no container image) via a self-hosted runner |
 
 More stacks get added as separate directories alongside it.
 
