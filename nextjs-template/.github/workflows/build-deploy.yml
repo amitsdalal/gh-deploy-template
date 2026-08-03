@@ -231,6 +231,7 @@ jobs:
         # No `down -v` -- that would delete the nginx config volume and take the
         # site down during the pull. `up -d` recreates only what changed.
         run: |
+          docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILES down --remove-orphans || true
           docker compose -p "$COMPOSE_PROJECT_NAME" \
             $COMPOSE_FILES up -d --remove-orphans --force-recreate
 
@@ -251,8 +252,9 @@ jobs:
         run: |
           PREV=$((APP_VERSION - 1))
           echo "::warning::rolling back to ${CI_ENVIRONMENT_NAME}-${PREV}"
+          docker compose -p "$COMPOSE_PROJECT_NAME" $COMPOSE_FILES down --remove-orphans || true
           APP_VERSION="$PREV" docker compose -p "$COMPOSE_PROJECT_NAME" \
-            $COMPOSE_FILES up -d
+            $COMPOSE_FILES up -d --remove-orphans
 
       - name: Prune old images
         if: always()
